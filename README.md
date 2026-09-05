@@ -4,6 +4,10 @@ Build, download and preprocess a dataset of **Human Protein Atlas (HPA) tissue i
 images** for training vision models. Bright-field tissue microarray cores, 3000x3000 RGB, one protein
 stained brown (DAB) per image, 45 normal tissue categories.
 
+![One example image per tissue category](docs/images/tissue_overview.jpg)
+
+*One example per tissue category of the full dataset (December 2025 release, IDR source); figures are made by `docs/make_figures.py`.*
+
 Everything starts from public sources (the HPA XML release and, optionally, the Image Data Resource) and
 ends with a dataset CSV plus the downloaded, segmented and cropped images:
 
@@ -40,6 +44,7 @@ scripts/
   generate_tissue_masks.py          tissue segmentation masks
   crop_images_to_masks.py           crops images to their mask
 tests/                              pytest unit tests for every script (no network)
+docs/                               README figures and the script that renders them
 ```
 
 ## 1. Setup
@@ -136,6 +141,10 @@ hpa_tissue/
   download_failed_<ts>.csv, verify_failed_<ts>.csv           (only when something failed)
   metadata/generate_tissue_masks_{failed,no_tissue}_<ts>.csv
 ```
+
+![Tissue mask and crop examples](docs/images/segmentation_cropping.jpg)
+
+*Left: original core. Middle: tissue mask outline from `generate_tissue_masks.py` (convex hull per tissue fragment). Right: crop from `crop_images_to_masks.py`.*
 
 ## 3. Build a dataset from an HPA release
 
