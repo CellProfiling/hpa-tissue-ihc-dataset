@@ -22,7 +22,7 @@ joined onto any dataset CSV by `build_annotations.py` (section 4).
 The pipeline produces two CSVs: the **full dataset** (all 45 tissue categories, ~700k images from IDR or ~1.2M
 from HPA) and a **pilot dataset** (20 tissues of different complexity, ~190k images), both with download
 URLs and an antibody-disjoint train/val/test split. The CSVs we built from the December 2025 release
-(`HPA_pilot_dataset_idr.csv` and the IDR table) are shared separately; they are outputs of this repository,
+(`HPA_pilot_dataset.csv` and the IDR table) are shared separately; they are outputs of this repository,
 not part of it.
 
 * Have a dataset CSV? Start at [section 2](#2-download-and-preprocess-a-dataset-csv) (download, masks, crops).
@@ -71,7 +71,7 @@ pip install -r requirements.txt
 
 ## 2. Download and preprocess a dataset CSV
 
-A dataset CSV (`HPA_pilot_dataset_idr.csv`, or any output of section 3) has one row per image:
+A dataset CSV (`HPA_pilot_dataset.csv`, or any output of section 3) has one row per image:
 
 ```
 image_id, antibody_id, ensembl_id, gene_name, tissue, organ, patient_id, image_type,
@@ -90,9 +90,9 @@ hpa_url, idr_available, idr_ftp_path, idr_url, local_path, set
 ### Step 1 - download
 
 ```bash
-python scripts/download_dataset_images.py --csv HPA_pilot_dataset_idr.csv --root ./hpa_tissue --workers 8
+python scripts/download_dataset_images.py --csv HPA_pilot_dataset.csv --root ./hpa_tissue --workers 8
 # one split only, or a first look:
-python scripts/download_dataset_images.py --csv HPA_pilot_dataset_idr.csv --root ./hpa_tissue --set test --max-images 100
+python scripts/download_dataset_images.py --csv HPA_pilot_dataset.csv --root ./hpa_tissue --set test --max-images 100
 ```
 
 Tries `idr_url` first, then `hpa_url` (`--source-order hpa,idr` to swap). Each file is streamed to a temp
@@ -111,7 +111,7 @@ corrupt ones so that the next download run fetches them again). Useful after a d
 ### Step 2 - tissue masks (segmentation)
 
 ```bash
-python scripts/generate_tissue_masks.py --csv-file HPA_pilot_dataset_idr.csv --img-root ./hpa_tissue \
+python scripts/generate_tissue_masks.py --csv-file HPA_pilot_dataset.csv --img-root ./hpa_tissue \
     --num-workers 8 --output-format npy
 ```
 
@@ -125,7 +125,7 @@ non-empty masks are skipped, so it is resumable.
 ### Step 3 - crops
 
 ```bash
-python scripts/crop_images_to_masks.py --csv-file HPA_pilot_dataset_idr.csv --img-root ./hpa_tissue \
+python scripts/crop_images_to_masks.py --csv-file HPA_pilot_dataset.csv --img-root ./hpa_tissue \
     --mask-format npy --padding 20 --num-workers 8
 ```
 
@@ -206,15 +206,15 @@ makes `local_path` follow the IDR batch folders; without it images are grouped i
 ### Step 3 - split into full + pilot CSVs
 
 ```bash
-# source 1: IDR
+# pilot dataset from source 1 (IDR-mirrored images)
 python scripts/prepare_pilot_dataset.py \
     --images-csv ./hpa_tissue/metadata/images.csv --antibodies-csv ./hpa_tissue/metadata/antibodies.csv \
-    --idr-table ./idr_ftp_paths.csv --source idr \
-    --stage both --out-dir ./hpa_tissue/metadata --save-plots --plot-dir ./hpa_tissue/metadata
-# source 2: HPA website
+    --idr-table ./idr_ftp_paths.csv --source idr --stage pilot --out-dir ./hpa_tissue/metadata
+# full dataset from source 2 (every HPA image)
 python scripts/prepare_pilot_dataset.py \
     --images-csv ./hpa_tissue/metadata/images.csv --antibodies-csv ./hpa_tissue/metadata/antibodies.csv \
-    --source all --stage both --out-dir ./hpa_tissue/metadata --save-plots --plot-dir ./hpa_tissue/metadata
+    --source all --stage full --out-dir ./hpa_tissue/metadata
+# --stage both writes both files for one source; --save-plots --plot-dir <dir> adds tissue/organ histograms
 ```
 
 #### How the dataset is built
@@ -285,8 +285,8 @@ brackets are from the December 2025 release with `--source idr`.
   stratified split. Use this to keep test images fixed across HPA releases.
 * The script aborts if any antibody ends up in more than one split.
 
-Outputs in `--out-dir`: `HPA_full_dataset_<source>.csv` and `HPA_pilot_dataset_<source>.csv` (plus
-tissue/organ distribution PNGs with `--save-plots`). The row count after each step is in the log. Runs in a few minutes on a whole crawl (~2.7 M rows).
+Outputs in `--out-dir`: `HPA_full_dataset.csv` and/or `HPA_pilot_dataset.csv` (`--full-output` / `--pilot-output`
+to rename, e.g. when building both sources into one directory). The row count after each step is in the log. Runs in a few minutes on a whole crawl (~2.7 M rows).
 
 Then continue with [section 2](#2-download-and-preprocess-a-dataset-csv) on the CSV you want; the
 downloader works for the full set too.
@@ -311,7 +311,7 @@ The join key from a dataset CSV to `cells.csv` and `tissues.csv` is `(antibody_i
 dataset CSV:
 
 ```bash
-python scripts/build_annotations.py --dataset-csv HPA_pilot_dataset_idr.csv --metadata-dir ./hpa_tissue/metadata
+python scripts/build_annotations.py --dataset-csv HPA_pilot_dataset.csv --metadata-dir ./hpa_tissue/metadata
 ```
 
 * **`<dataset>_cell_annotations.csv`**, one row per image x annotated cell type (the cell-type-level labels):

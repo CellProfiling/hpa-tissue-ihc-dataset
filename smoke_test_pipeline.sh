@@ -55,11 +55,11 @@ IDR_ARGS=()
 "$PYTHON" "$S/prepare_pilot_dataset.py" --images-csv "$META/images.csv" --antibodies-csv "$META/antibodies.csv" \
   ${IDR_ARGS[@]+"${IDR_ARGS[@]}"} --source "$SOURCE" --stage both --out-dir "$META" --save-plots --plot-dir "$META" \
   --log-file "$META/prepare_pilot_dataset.log"
-PILOT=$META/HPA_pilot_dataset_$SOURCE.csv
+PILOT=$META/HPA_pilot_dataset.csv
 
 step "2b. build_annotations.py"
 "$PYTHON" "$S/build_annotations.py" --dataset-csv "$PILOT" --metadata-dir "$META" --out-dir "$META"
-head -3 "$META/HPA_pilot_dataset_${SOURCE}_cell_annotations.csv" | cut -c1-200
+head -3 "$META/HPA_pilot_dataset_cell_annotations.csv" | cut -c1-200
 
 step "3. pick $N_PER_SET images per split -> smoke_subset.csv"
 SUBSET=$META/smoke_subset.csv

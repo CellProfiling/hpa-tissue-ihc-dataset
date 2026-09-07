@@ -386,7 +386,7 @@ def sample_pilot_tissues(seed=42, n_easy=7, n_moderate=8):
 # --------------------------------------------------------------------------- #
 
 def build_full_dataset(images, antibodies, idr_table, source, seed,
-                       duplicate_policy="prefer", duplicate_report="duplicates.csv",
+                       duplicate_policy="prefer", duplicate_report="duplicate_image_ids.csv",
                        fracs=(0.70, 0.10, 0.20), split_from=None, steps=None):
     steps = steps if steps is not None else StepLog("full")
     df, n_fixed = normalize_patient_id(images)
@@ -484,8 +484,8 @@ def parse_args(argv=None):
     p.add_argument("--source", choices=["idr", "all"], default="idr",
                    help="idr: only images mirrored on IDR; all: every crawled image")
     p.add_argument("--stage", choices=["full", "pilot", "both"], default="both")
-    p.add_argument("--full-output", default=None, help="Default: <out-dir>/HPA_full_dataset_<source>.csv")
-    p.add_argument("--pilot-output", default=None, help="Default: <out-dir>/HPA_pilot_dataset_<source>.csv")
+    p.add_argument("--full-output", default=None, help="Default: <out-dir>/HPA_full_dataset.csv")
+    p.add_argument("--pilot-output", default=None, help="Default: <out-dir>/HPA_pilot_dataset.csv")
     p.add_argument("--out-dir", default=d["out_dir"])
     p.add_argument("--train-frac", type=float, default=0.70)
     p.add_argument("--val-frac", type=float, default=0.10)
@@ -507,8 +507,8 @@ def parse_args(argv=None):
         p.error("train/val/test fractions must sum to 1")
     if args.source == "idr" and not os.path.exists(args.idr_table):
         p.error(f"--source idr needs --idr-table (not found: {args.idr_table})")
-    args.full_output = args.full_output or os.path.join(args.out_dir, f"HPA_full_dataset_{args.source}.csv")
-    args.pilot_output = args.pilot_output or os.path.join(args.out_dir, f"HPA_pilot_dataset_{args.source}.csv")
+    args.full_output = args.full_output or os.path.join(args.out_dir, "HPA_full_dataset.csv")
+    args.pilot_output = args.pilot_output or os.path.join(args.out_dir, "HPA_pilot_dataset.csv")
     args.plot_dir = args.plot_dir or args.out_dir
     return args
 
