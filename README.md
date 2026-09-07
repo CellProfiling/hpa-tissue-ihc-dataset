@@ -376,7 +376,6 @@ pytest -q
 ```
 
 Unit tests cover every script with synthetic data and a fake HTTP session; nothing touches the network.
-They also run on GitHub Actions for every push.
 
 ## 8. Data licences
 
