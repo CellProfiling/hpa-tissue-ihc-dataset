@@ -16,9 +16,18 @@ tissue. ``hpa_xml_parser.py`` writes these as ``cells.csv``, ``patients.csv`` an
     the cell types (``protein_detected`` = any cell type stained).
 ``<prefix>_cell_types.csv``         cell-type vocabulary with image/antibody counts.
 
+With ``--subcellular-tsv`` the HPA subcellular location annotation (per gene, from
+immunofluorescence of cell lines; ``subcellular_location.tsv.zip`` on
+https://www.proteinatlas.org/about/download, downloaded automatically if the path
+does not exist) is joined onto the image annotations by ``ensembl_id`` as
+``subcellular_*`` columns, and a fourth file is written:
+
+``<prefix>_subcellular_locations.csv``  location vocabulary with gene/image counts.
+
 Example:
-    python build_annotations.py --dataset-csv HPA_pilot_dataset_idr.csv \\
-        --metadata-dir ./hpa_tissue/metadata --out-dir ./hpa_tissue/metadata
+    python build_annotations.py --dataset-csv HPA_pilot_dataset.csv \\
+        --metadata-dir ./hpa_tissue/metadata --out-dir ./hpa_tissue/metadata \\
+        --subcellular-tsv ./hpa_tissue/metadata/subcellular_location.tsv.zip
 """
 
 import argparse
@@ -39,6 +48,23 @@ QUANTITY_CODE = {"none": 0, "<25%": 1, "25%-75%": 2, "25-75%": 2, "25% - 75%": 2
 LOCATION_CODE = {"none": 0, "cytoplasmic/membranous": 1, "nuclear": 2, "both": 3}
 
 DATASET_COLUMNS = ["image_id", "antibody_id", "ensembl_id", "gene_name", "tissue", "organ", "patient_id"]
+
+SUBCELLULAR_URL = "https://www.proteinatlas.org/download/tsv/subcellular_location.tsv.zip"
+# HPA column -> output column. "Gene" (Ensembl id) is the join key; "Gene name" is already in the dataset.
+SUBCELLULAR_COLUMNS = {
+    "Reliability": "subcellular_reliability",
+    "Main location": "subcellular_main_location",
+    "Additional location": "subcellular_additional_location",
+    "Extracellular location": "subcellular_extracellular_location",
+    "Enhanced": "subcellular_enhanced",
+    "Supported": "subcellular_supported",
+    "Approved": "subcellular_approved",
+    "Uncertain": "subcellular_uncertain",
+    "Single-cell variation intensity": "subcellular_single_cell_variation_intensity",
+    "Single-cell variation spatial": "subcellular_single_cell_variation_spatial",
+    "Cell cycle dependency": "subcellular_cell_cycle_dependency",
+    "GO id": "subcellular_go_id",
+}
 
 
 def code(series, mapping):
@@ -116,6 +142,55 @@ def build_cell_type_vocabulary(cell_annotations):
     return voc.reset_index(drop=True)
 
 
+def fetch_subcellular_location(path):
+    """Download HPA's subcellular_location.tsv.zip to ``path`` unless it already exists."""
+    if os.path.exists(path):
+        return path
+    import requests
+    logger.info("downloading %s -> %s", SUBCELLULAR_URL, path)
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    r = requests.get(SUBCELLULAR_URL, timeout=300)
+    r.raise_for_status()
+    tmp = path + ".part"
+    with open(tmp, "wb") as f:
+        f.write(r.content)
+    os.replace(tmp, path)
+    return path
+
+
+def load_subcellular(path):
+    """Read subcellular_location.tsv(.zip): one row per gene, columns renamed to ``subcellular_*``."""
+    df = pd.read_csv(path, sep="\t", **CSV_READ_KWARGS)
+    missing = [c for c in ["Gene"] + list(SUBCELLULAR_COLUMNS) if c not in df.columns]
+    if missing:
+        raise ValueError(f"{path} lacks columns {missing}; expected the HPA subcellular_location.tsv")
+    df = df.rename(columns={"Gene": "ensembl_id", **SUBCELLULAR_COLUMNS})
+    return dedupe(df[["ensembl_id"] + list(SUBCELLULAR_COLUMNS.values())], ["ensembl_id"], os.path.basename(path))
+
+
+def attach_subcellular(image_annotations, subcellular):
+    """Left-join the per-gene subcellular columns by ensembl_id (empty where the gene has no entry)."""
+    out = image_annotations.merge(subcellular, on="ensembl_id", how="left").fillna("")
+    covered = out["subcellular_main_location"] != ""
+    logger.info("subcellular location: %d of %d images (%d of %d genes) have an entry",
+                int(covered.sum()), len(out), out.loc[covered, "ensembl_id"].nunique(), out["ensembl_id"].nunique())
+    return out
+
+
+def build_subcellular_vocabulary(image_annotations):
+    """One row per location: number of genes / images with it as main location, and as main or additional."""
+    def explode(col):
+        s = image_annotations[["ensembl_id", "image_id", col]]
+        s = s[s[col] != ""].assign(location=lambda d: d[col].str.split(";")).explode("location")
+        return s[["ensembl_id", "image_id", "location"]]
+    main = explode("subcellular_main_location")
+    anyloc = pd.concat([main, explode("subcellular_additional_location")])
+    voc = main.groupby("location").agg(n_genes_main=("ensembl_id", "nunique"), n_images_main=("image_id", "nunique"))
+    voc = voc.join(anyloc.groupby("location").agg(n_genes_any=("ensembl_id", "nunique"), n_images_any=("image_id", "nunique")), how="outer")
+    voc = voc.fillna(0).astype(int).reset_index().sort_values(["n_images_main", "location"], ascending=[False, True])
+    return voc[["location", "n_genes_main", "n_genes_any", "n_images_main", "n_images_any"]].reset_index(drop=True)
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--dataset-csv", required=True, help="Dataset CSV from prepare_pilot_dataset.py")
@@ -123,6 +198,9 @@ def main(argv=None):
                    help="Directory with cells.csv, patients.csv, tissues.csv from hpa_xml_parser.py")
     p.add_argument("--out-dir", default=None, help="Output directory (default: directory of --dataset-csv)")
     p.add_argument("--prefix", default=None, help="Output file prefix (default: dataset file name without .csv[.gz])")
+    p.add_argument("--subcellular-tsv", default=None,
+                   help="HPA subcellular_location.tsv or .tsv.zip; downloaded from proteinatlas.org to this path "
+                        "if it does not exist. Omit to skip the subcellular_* columns.")
     args = p.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", force=True)
 
@@ -153,11 +231,18 @@ def main(argv=None):
     cell_ann = build_cell_annotations(dataset, cells)
     img_ann = build_image_annotations(dataset, cell_ann, patients, tissues)
     vocab = build_cell_type_vocabulary(cell_ann)
+    outputs = [("cell_annotations", cell_ann), ("image_annotations", img_ann), ("cell_types", vocab)]
+
+    if args.subcellular_tsv:
+        subcellular = load_subcellular(fetch_subcellular_location(args.subcellular_tsv))
+        img_ann = attach_subcellular(img_ann, subcellular)
+        outputs[1] = ("image_annotations", img_ann)
+        outputs.append(("subcellular_locations", build_subcellular_vocabulary(img_ann)))
 
     n_without = int((img_ann["n_cell_types"] == 0).sum())
     logger.info("%d images, %d image x cell-type rows, %d cell types, %d images without any cell annotation",
                 len(img_ann), len(cell_ann), len(vocab), n_without)
-    for name, df in (("cell_annotations", cell_ann), ("image_annotations", img_ann), ("cell_types", vocab)):
+    for name, df in outputs:
         path = os.path.join(out_dir, f"{prefix}_{name}.csv")
         df.to_csv(path, index=False)
         logger.info("wrote %s (%d rows)", path, len(df))

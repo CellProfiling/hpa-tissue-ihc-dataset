@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # End-to-end smoke test of the HPA tissue dataset pipeline on a small XML subset.
 #
-#   crawl -> (IDR table) -> split -> download -> verify -> tissue masks -> crops
+#   crawl -> (IDR table) -> split -> annotations (+ subcellular) -> download -> verify -> tissue masks -> crops
 #
 # Usage:
 #   smoke_test_pipeline.sh <proteinatlas_subset.xml> <work_dir> [idr_table.csv]
@@ -58,7 +58,9 @@ IDR_ARGS=()
 PILOT=$META/HPA_pilot_dataset.csv
 
 step "2b. build_annotations.py"
-"$PYTHON" "$S/build_annotations.py" --dataset-csv "$PILOT" --metadata-dir "$META" --out-dir "$META"
+"$PYTHON" "$S/build_annotations.py" --dataset-csv "$PILOT" --metadata-dir "$META" --out-dir "$META" \
+  --subcellular-tsv "$META/subcellular_location.tsv.zip"
+head -2 "$META/HPA_pilot_dataset_subcellular_locations.csv"
 head -3 "$META/HPA_pilot_dataset_cell_annotations.csv" | cut -c1-200
 
 step "3. pick $N_PER_SET images per split -> smoke_subset.csv"

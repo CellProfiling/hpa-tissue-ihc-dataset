@@ -39,7 +39,7 @@ scripts/
   hpa_xml_parser.py                 HPA XML -> images.csv, antibodies.csv, ...
   build_idr_ftp_paths.py            IDR table: which HPA images are mirrored on IDR, and where
   prepare_pilot_dataset.py          filters the crawl, builds full + pilot CSVs with train/val/test splits
-  build_annotations.py              joins the HPA cell-type and patient annotations onto a dataset CSV (section 4)
+  build_annotations.py              joins the HPA cell-type, patient and subcellular-location annotations onto a dataset CSV (section 4)
   download_dataset_images.py        downloads (and optionally verifies) the images of a dataset CSV
   generate_tissue_masks.py          tissue segmentation masks
   crop_images_to_masks.py           crops images to their mask
@@ -337,6 +337,33 @@ crawl has 108 distinct cell-type names, the full dataset 107 (either source), th
 image x cell-type rows for 187 685 images; every image has at least one annotated cell type). Should a metadata table contain repeated
 keys, the script drops exact duplicates, keeps the first value of a conflict and logs the counts.
 
+### Subcellular location (per gene)
+
+The IHC `location` above is coarse (nuclear vs cytoplasmic/membranous). HPA also publishes a fine-grained
+subcellular location per **gene** from immunofluorescence of cultured cell lines (the HPA Subcellular
+section; 13 603 genes in v25): `subcellular_location.tsv.zip` at https://www.proteinatlas.org/about/download.
+Pass `--subcellular-tsv <path>` to join it by `ensembl_id`; the file is downloaded to that path if it does not
+exist:
+
+```bash
+python scripts/build_annotations.py --dataset-csv HPA_pilot_dataset.csv --metadata-dir ./hpa_tissue/metadata \
+    --subcellular-tsv ./hpa_tissue/metadata/subcellular_location.tsv.zip
+```
+
+This adds `subcellular_*` columns to `<dataset>_image_annotations.csv`, one per column of the HPA file:
+`subcellular_reliability` (Enhanced / Supported / Approved / Uncertain), `subcellular_main_location`,
+`subcellular_additional_location` and `subcellular_extracellular_location` (`;`-separated location names, e.g.
+`Nucleoplasm;Cytosol`), the locations grouped by reliability level (`subcellular_enhanced`,
+`subcellular_supported`, `subcellular_approved`, `subcellular_uncertain`),
+`subcellular_single_cell_variation_intensity`, `subcellular_single_cell_variation_spatial`,
+`subcellular_cell_cycle_dependency` and `subcellular_go_id` (GO cellular-component terms). The columns are
+empty for genes without an entry; in the December 2025 datasets 78 % of the images have one (pilot: 146 546 of
+187 685 images, 4 785 of 6 126 genes; full: 936 115 of 1 190 640 images, 8 204 of 10 430 genes; 49 distinct
+locations). It also writes **`<dataset>_subcellular_locations.csv`**,
+the location vocabulary with gene and image counts, as main location and as main-or-additional location.
+Being per gene, the annotation is identical for all images of a gene and describes cell lines, not the tissue
+in the image.
+
 ## 5. Smoke test (~3 min, ~200 MB)
 
 `smoke_test_pipeline.sh` runs the whole chain on a small XML and downloads two images per split:
@@ -348,7 +375,7 @@ SOURCE=all ./smoke_test_pipeline.sh subset.xml ./smoke_run_all             # sou
 ```
 
 It ends with `SMOKE TEST OK` and lists the TIFFs, masks and crops under `./smoke_run/images/`. Every
-intermediate file (crawl CSVs, split CSVs, step counts, reports) is in `./smoke_run/metadata/`. Reference
+intermediate file (crawl CSVs, split CSVs, annotations, reports) is in `./smoke_run/metadata/`. Reference
 run (60 genes): crawl 12 s (11 701 image rows), split 19 s (pilot 670 rows), 6 downloads ~1 min, masks 6 s,
 crops 5 s. Run it as a single process (on Slurm: `srun -n1 ...`).
 
@@ -389,7 +416,9 @@ Unit tests cover every script with synthetic data and a fake HTTP session; nothi
 
 ## References
 
-* HPA: https://www.proteinatlas.org (XML: https://www.proteinatlas.org/download/proteinatlas.xml.gz)
+* HPA: https://www.proteinatlas.org (XML: https://www.proteinatlas.org/download/proteinatlas.xml.gz ;
+  subcellular location TSV: https://www.proteinatlas.org/download/tsv/subcellular_location.tsv.zip , both
+  listed at https://www.proteinatlas.org/about/download)
 * IDR study idr0043: https://idr.openmicroscopy.org/webclient/?show=project-1201 ,
   FTP `ftp.ebi.ac.uk/pub/databases/IDR/idr0043-uhlen-humanproteinatlas/`,
   metadata https://github.com/IDR/idr0043-uhlen-humanproteinatlas
