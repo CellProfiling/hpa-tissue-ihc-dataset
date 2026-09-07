@@ -56,7 +56,6 @@ IDR_ARGS=()
   ${IDR_ARGS[@]+"${IDR_ARGS[@]}"} --source "$SOURCE" --stage both --out-dir "$META" --save-plots --plot-dir "$META" \
   --log-file "$META/prepare_pilot_dataset.log"
 PILOT=$META/HPA_pilot_dataset_$SOURCE.csv
-echo "--- step counts"; cat "$PILOT.steps.csv"
 
 step "2b. build_annotations.py"
 "$PYTHON" "$S/build_annotations.py" --dataset-csv "$PILOT" --metadata-dir "$META" --out-dir "$META"

@@ -220,8 +220,8 @@ python scripts/prepare_pilot_dataset.py \
 #### How the dataset is built
 
 The crawl (`images.csv`) has one row per image and tissue: 2.68 M rows for the December 2025 release. Every
-step below is a function in `prepare_pilot_dataset.py`; the script writes the row counts after each step to
-`<pilot>.steps.csv`. Counts in brackets are from the December 2025 release with `--source idr`.
+step below is a function in `prepare_pilot_dataset.py`; the script logs the row counts after each step. Counts in
+brackets are from the December 2025 release with `--source idr`.
 
 **A. Full dataset** [2 681 024 image rows, 21 195 antibodies, 14 458 genes, 49 tissue categories]
 
@@ -243,7 +243,7 @@ step below is a function in `prepare_pilot_dataset.py`; the script writes the ro
      as possible without near-duplicate stainings of the same protein.
 5. **Unique image id.** HPA cross-lists every "Soft tissue 1" image under "Adipose tissue" as well (same
    image, same patient). The default `--duplicate-policy prefer` keeps the "Soft tissue 1" row; `drop`
-   removes both; `fail` stops and lets you inspect `<output>.csv.duplicates.csv` [698 053].
+   removes both; `fail` stops and writes the duplicated rows to `duplicate_image_ids.csv` [698 053].
 6. **Split** (see C) [train 493 896 / val 69 727 / test 134 430 for the IDR full set].
 
 **B. Pilot dataset**
@@ -285,9 +285,8 @@ step below is a function in `prepare_pilot_dataset.py`; the script writes the ro
   stratified split. Use this to keep test images fixed across HPA releases.
 * The script aborts if any antibody ends up in more than one split.
 
-Outputs in `--out-dir`: `HPA_full_dataset_<source>.csv`, `HPA_pilot_dataset_<source>.csv`,
-`<pilot>.steps.csv` (row count after each filter), `<full|pilot>.csv.duplicates.csv` (the cross-listed ids),
-optional tissue/organ distribution PNGs. Runs in a few minutes on a whole crawl (~2.7 M rows).
+Outputs in `--out-dir`: `HPA_full_dataset_<source>.csv` and `HPA_pilot_dataset_<source>.csv` (plus
+tissue/organ distribution PNGs with `--save-plots`). The row count after each step is in the log. Runs in a few minutes on a whole crawl (~2.7 M rows).
 
 Then continue with [section 2](#2-download-and-preprocess-a-dataset-csv) on the CSV you want; the
 downloader works for the full set too.

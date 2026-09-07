@@ -229,7 +229,7 @@ def resolve_duplicates(df, policy, report_path):
     """Enforce unique image_id.
 
     policy:
-      fail   - write the report and exit 2
+      fail   - write the duplicated rows to report_path and exit 2
       prefer - for ids listed under several tissues keep the row whose tissue is in
                TISSUE_PRECEDENCE (exactly one such row); ids that cannot be resolved
                that way lose all their rows
@@ -240,14 +240,15 @@ def resolve_duplicates(df, policy, report_path):
     if n_dup_ids == 0:
         return df
     dups = df[dup_mask].sort_values(["image_id", "tissue"])
-    os.makedirs(os.path.dirname(os.path.abspath(report_path)), exist_ok=True)
-    dups.to_csv(report_path, index=False)
     pairs = (dups.groupby("image_id")["tissue"].agg(lambda t: " | ".join(sorted(t)))
              .value_counts().head(5).to_dict())
-    logger.warning("%d image_ids appear more than once (%d rows); tissue pairs: %s; report: %s",
-                   n_dup_ids, len(dups), pairs, report_path)
+    logger.warning("%d image_ids appear more than once (%d rows); tissue pairs: %s",
+                   n_dup_ids, len(dups), pairs)
     if policy == "fail":
-        logger.error("Duplicate image_ids present. Re-run with --duplicate-policy prefer|drop, or fix the crawl.")
+        os.makedirs(os.path.dirname(os.path.abspath(report_path)), exist_ok=True)
+        dups.to_csv(report_path, index=False)
+        logger.error("Duplicate image_ids present; rows written to %s. Re-run with --duplicate-policy "
+                     "prefer|drop, or fix the crawl.", report_path)
         raise SystemExit(2)
     if policy == "prefer":
         preferred = dups[dups["tissue"].isin(TISSUE_PRECEDENCE)]
@@ -538,7 +539,7 @@ def main(argv=None):
     full = build_full_dataset(
         images, antibodies, idr_table, args.source, args.seed,
         duplicate_policy=args.duplicate_policy,
-        duplicate_report=args.full_output + ".duplicates.csv",
+        duplicate_report=os.path.join(args.out_dir, "duplicate_image_ids.csv"),
         fracs=fracs, split_from=args.split_from, steps=steps,
     )
     full_out = finalize_columns(full)
@@ -563,9 +564,7 @@ def main(argv=None):
         if args.save_plots:
             save_distribution_plots(pilot_out, args.plot_dir, "pilot")
 
-    steps_path = (args.pilot_output if args.stage != "full" else args.full_output) + ".steps.csv"
-    steps.frame().to_csv(steps_path, index=False)
-    logger.info("step table: %s", steps_path)
+    logger.info("rows after each step:\n%s", steps.frame().to_string(index=False))
     return 0
 
 
