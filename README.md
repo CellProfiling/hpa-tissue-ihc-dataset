@@ -350,13 +350,13 @@ python scripts/build_annotations.py --dataset-csv HPA_pilot_dataset.csv --metada
     --subcellular-tsv ./hpa_tissue/metadata/subcellular_location.tsv.zip
 ```
 
-This adds `subcellular_*` columns to `<dataset>_image_annotations.csv`, one per column of the HPA file:
-`subcellular_reliability` (Enhanced / Supported / Approved / Uncertain), `subcellular_main_location`,
-`subcellular_additional_location` and `subcellular_extracellular_location` (`;`-separated location names, e.g.
-`Nucleoplasm;Cytosol`), the locations grouped by reliability level (`subcellular_enhanced`,
-`subcellular_supported`, `subcellular_approved`, `subcellular_uncertain`),
-`subcellular_single_cell_variation_intensity`, `subcellular_single_cell_variation_spatial`,
-`subcellular_cell_cycle_dependency` and `subcellular_go_id` (GO cellular-component terms). The columns are
+This adds seven `subcellular_*` columns to `<dataset>_image_annotations.csv`. HPA merges the locations seen
+with all antibodies of a gene into one list and scores **each location** by the combined evidence (antibody
+validation, agreement between antibodies, literature): `subcellular_enhanced`, `subcellular_supported`,
+`subcellular_approved` and `subcellular_uncertain` list the locations (`;`-separated, e.g. `Nucleoplasm;Cytosol`)
+annotated at that reliability level. `subcellular_main_location` and `subcellular_additional_location` are the
+same locations split by HPA's main/additional call, and `subcellular_reliability` is HPA's one summary score for
+the gene (in most genes the best level among its locations). The columns are
 empty for genes without an entry; in the December 2025 datasets 78 % of the images have one (pilot: 146 546 of
 187 685 images, 4 785 of 6 126 genes; full: 936 115 of 1 190 640 images, 8 204 of 10 430 genes; 49 distinct
 locations). It also writes **`<dataset>_subcellular_locations.csv`**,

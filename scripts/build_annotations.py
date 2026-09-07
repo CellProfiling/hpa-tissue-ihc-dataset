@@ -51,19 +51,17 @@ DATASET_COLUMNS = ["image_id", "antibody_id", "ensembl_id", "gene_name", "tissue
 
 SUBCELLULAR_URL = "https://www.proteinatlas.org/download/tsv/subcellular_location.tsv.zip"
 # HPA column -> output column. "Gene" (Ensembl id) is the join key; "Gene name" is already in the dataset.
+# "Reliability" is HPA's summary score per gene; Enhanced/Supported/Approved/Uncertain list the locations
+# annotated at that reliability level. Extracellular location, single-cell variation, cell cycle dependency
+# and GO ids are left out.
 SUBCELLULAR_COLUMNS = {
     "Reliability": "subcellular_reliability",
     "Main location": "subcellular_main_location",
     "Additional location": "subcellular_additional_location",
-    "Extracellular location": "subcellular_extracellular_location",
     "Enhanced": "subcellular_enhanced",
     "Supported": "subcellular_supported",
     "Approved": "subcellular_approved",
     "Uncertain": "subcellular_uncertain",
-    "Single-cell variation intensity": "subcellular_single_cell_variation_intensity",
-    "Single-cell variation spatial": "subcellular_single_cell_variation_spatial",
-    "Cell cycle dependency": "subcellular_cell_cycle_dependency",
-    "GO id": "subcellular_go_id",
 }
 
 

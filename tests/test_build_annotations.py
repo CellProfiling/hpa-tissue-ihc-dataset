@@ -65,7 +65,9 @@ def test_main_writes_three_files(tmp_path):
 
 
 def _subcellular_tsv(path):
-    cols = ["Gene", "Gene name"] + list(A.SUBCELLULAR_COLUMNS)
+    cols = ["Gene", "Gene name", "Reliability", "Main location", "Additional location", "Extracellular location", "Enhanced",
+            "Supported", "Approved", "Uncertain", "Single-cell variation intensity", "Single-cell variation spatial",
+            "Cell cycle dependency", "GO id"]
     rows = [
         ["G1", "A", "Enhanced", "Nucleoplasm;Cytosol", "Vesicles", "", "Nucleoplasm", "Cytosol;Vesicles", "", "", "", "", "",
          "Cytosol (GO:0005829);Nucleoplasm (GO:0005654);Vesicles (GO:0031982)"],
@@ -100,5 +102,5 @@ def test_main_with_subcellular_writes_fourth_file(tmp_path):
     tsv = tmp_path / "meta" / "subcellular_location.tsv"; _subcellular_tsv(tsv)
     assert A.main(["--dataset-csv", str(ds), "--metadata-dir", str(tmp_path / "meta"), "--subcellular-tsv", str(tsv)]) == 0
     img = pd.read_csv(tmp_path / "ds_image_annotations.csv", dtype=str, keep_default_na=False).set_index("image_id")
-    assert img.loc["i2", "subcellular_go_id"].startswith("Cytosol (GO:0005829)")
+    assert img.loc["i2", "subcellular_supported"] == "Cytosol;Vesicles" and "subcellular_go_id" not in img.columns
     assert (tmp_path / "ds_subcellular_locations.csv").exists()
