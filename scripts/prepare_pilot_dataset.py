@@ -12,9 +12,9 @@ Stage A - full dataset
        from the IDR normal-tissue table (see ``build_idr_ftp_paths.py``).
     2. ``--source idr``  keep only images mirrored on IDR
        ``--source all``  keep every crawled image (HPA URL always present)
-    3. Keep TIF images: ``image_type == "tif"`` on HPA, or mirrored on IDR
-       (IDR holds TIFs even when the HPA XML only offered a JPG). ``--allow-jpg``
-       disables this rule.
+    3. ``hpa_url`` always points to the ``.tif`` file: HPA serves every image as
+       TIFF at ``<image>.tif`` (302 to the EBI BioStudies mirror) even when the
+       XML lists only a JPG. ``image_type`` records what the XML listed.
     4. Remove the secondary tissue categories (Endometrium 2, Stomach 2,
        Soft tissue 2, Skin 2).
     5. Antibody filters: drop
@@ -156,10 +156,16 @@ def idr_path_mapping(idr_table):
 
 
 def attach_idr(images, idr_table):
-    """Add hpa_url / idr_ftp_path / idr_available / idr_url columns."""
+    """Add hpa_url / idr_ftp_path / idr_available / idr_url columns.
+
+    ``hpa_url`` is the ``.tif`` form of the crawled URL: HPA serves a TIFF for every
+    image at ``<image>.tif`` (redirect to EBI BioStudies), also when the XML only
+    offered the JPG (verified 2026-09-06).
+    """
     df = images.copy()
     if "hpa_url" not in df.columns:
         df = df.rename(columns={"image_url": "hpa_url"})
+    df["hpa_url"] = df["hpa_url"].str.replace(r"\.(jpe?g|tif|tiff)$", ".tif", regex=True)
     mapping = idr_path_mapping(idr_table) if idr_table is not None else {}
     df["idr_ftp_path"] = df["image_id"].map(mapping).fillna("")
     df["idr_available"] = df["idr_ftp_path"] != ""
@@ -173,13 +179,6 @@ def filter_source(df, source):
     if source == "all":
         return df
     raise ValueError(f"unknown source {source!r}")
-
-
-def filter_tif(df, allow_jpg=False):
-    """Keep images that exist as TIF: on HPA, or on the IDR mirror."""
-    if allow_jpg:
-        return df
-    return df[(df["image_type"] == "tif") | df["idr_available"]]
 
 
 def remove_secondary_tissues(df):
@@ -385,7 +384,7 @@ def sample_pilot_tissues(seed=42, n_easy=7, n_moderate=8):
 # Stages
 # --------------------------------------------------------------------------- #
 
-def build_full_dataset(images, antibodies, idr_table, source, seed, allow_jpg=False,
+def build_full_dataset(images, antibodies, idr_table, source, seed,
                        duplicate_policy="prefer", duplicate_report="duplicates.csv",
                        fracs=(0.70, 0.10, 0.20), split_from=None, steps=None):
     steps = steps if steps is not None else StepLog("full")
@@ -396,8 +395,6 @@ def build_full_dataset(images, antibodies, idr_table, source, seed, allow_jpg=Fa
     steps.add("crawled images", df)
     df = filter_source(df, source)
     steps.add(f"source = {source}", df)
-    df = filter_tif(df, allow_jpg)
-    steps.add("TIF available (HPA or IDR)" if not allow_jpg else "any image type", df)
     df = remove_secondary_tissues(df)
     steps.add("remove secondary tissue categories", df)
     df = filter_antibodies(df, antibodies, seed, steps)
@@ -485,7 +482,6 @@ def parse_args(argv=None):
                         "Required for --source idr; optional otherwise.")
     p.add_argument("--source", choices=["idr", "all"], default="idr",
                    help="idr: only images mirrored on IDR; all: every crawled image")
-    p.add_argument("--allow-jpg", action="store_true", help="Keep images that only exist as JPG")
     p.add_argument("--stage", choices=["full", "pilot", "both"], default="both")
     p.add_argument("--full-output", default=None, help="Default: <out-dir>/HPA_full_dataset_<source>.csv")
     p.add_argument("--pilot-output", default=None, help="Default: <out-dir>/HPA_pilot_dataset_<source>.csv")
@@ -540,7 +536,7 @@ def main(argv=None):
 
     steps = StepLog("full")
     full = build_full_dataset(
-        images, antibodies, idr_table, args.source, args.seed, allow_jpg=args.allow_jpg,
+        images, antibodies, idr_table, args.source, args.seed,
         duplicate_policy=args.duplicate_policy,
         duplicate_report=args.full_output + ".duplicates.csv",
         fracs=fracs, split_from=args.split_from, steps=steps,

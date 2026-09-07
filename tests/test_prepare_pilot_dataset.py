@@ -90,15 +90,13 @@ def test_attach_idr_builds_urls(images, idr_table):
     assert "orphan" not in set(df.loc[df["idr_available"], "image_id"])
 
 
-def test_source_and_tif_rules(images, idr_table):
+def test_source_rule_and_tif_urls(images, idr_table):
     df = P.attach_idr(images, idr_table)
     idr_only = P.filter_source(df, "idr")
     assert idr_only["idr_available"].all()
     assert len(P.filter_source(df, "all")) == len(df)
-    tif = P.filter_tif(df)
-    jpg_kept = tif[tif["image_type"] == "jpg"]
-    assert jpg_kept["idr_available"].all()          # JPG rows survive only via IDR
-    assert len(P.filter_tif(df, allow_jpg=True)) == len(df)
+    assert df["hpa_url"].str.endswith(".tif").all()      # JPG-only crawl rows still get the .tif link
+    assert (df["image_type"] == "jpg").any()               # ...while image_type keeps what the XML listed
 
 
 def test_antibody_filters_order(images, antibodies):

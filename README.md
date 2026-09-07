@@ -63,8 +63,8 @@ pip install -r requirements.txt
   | dataset (December 2025 release) | images | TIFFs on disk |
   |---|---|---|
   | pilot, `--source idr` (20 tissues) | 187 685 | 5.1 TB |
-  | full, `--source idr` (45 tissues, IDR-mirrored images) | 697 989 | 19 TB |
-  | full, `--source all` (45 tissues, every HPA image) | 1 190 508 | 32 TB |
+  | full, `--source idr` (45 tissues, IDR-mirrored images) | 698 053 | 19 TB |
+  | full, `--source all` (45 tissues, every HPA image) | 1 190 640 | 32 TB |
 
 * Run the long steps in the background (`nohup`, `tmux`, or your job scheduler). Download and mask
   generation are resumable and skip files that already exist.
@@ -81,8 +81,9 @@ hpa_url, idr_available, idr_ftp_path, idr_url, local_path, set
 * `set` is `train` / `val` / `test` (pilot: 133 203 / 18 526 / 35 956). Splits are by antibody (no antibody
   appears in two splits) and stratified by tissue.
 * `idr_url` is the EBI/IDR mirror (`https://ftp.ebi.ac.uk/pub/databases/IDR/idr0043-uhlen-humanproteinatlas/...`,
-  answers `200 image/tiff`). `hpa_url` is the HPA link; it answers `302` and redirects to the EBI
-  BioStudies mirror. Both give the same TIFF.
+  answers `200 image/tiff`). `hpa_url` is the HPA `.tif` link; it answers `302` and redirects to the EBI
+  BioStudies mirror. Both give the same TIFF. HPA serves every image as TIFF at `<image>.tif`, also the
+  ones whose XML entry lists only a JPG (`image_type` = `jpg` records that).
 * `local_path` is the sub-directory an image is stored in. All scripts use the layout
   `<root>/<local_path>/<image_id>.tif`; keep it, do not rename files.
 
@@ -222,27 +223,28 @@ The crawl (`images.csv`) has one row per image and tissue: 2.68 M rows for the D
 step below is a function in `prepare_pilot_dataset.py`; the script writes the row counts after each step to
 `<pilot>.steps.csv`. Counts in brackets are from the December 2025 release with `--source idr`.
 
-**A. Full dataset** [2 680 905 image rows, 21 195 antibodies, 14 798 genes, 49 tissue categories]
+**A. Full dataset** [2 681 024 image rows, 21 195 antibodies, 14 458 genes, 49 tissue categories]
 
 1. **Source.** `--source idr` keeps images that exist on the IDR mirror (matched by `image_id` against the
-   IDR table) [1 462 106]; `--source all` keeps everything.
-2. **TIFF available.** Keep an image if HPA offers it as TIFF or if it is on IDR (IDR holds TIFFs even where
-   the HPA XML only lists a JPG). `--allow-jpg` disables this [1 462 106].
+   IDR table) [1 462 091]; `--source all` keeps everything.
+2. **TIFF link.** `hpa_url` is set to `<image>.tif` for every row. HPA serves a TIFF at that address for
+   every image, also where the XML lists only a JPG (about 5 % of the images); `image_type` keeps what
+   the XML listed. No image is dropped in this step.
 3. **Secondary tissue categories.** HPA has a second tissue-microarray series for four organs, labelled
    "Endometrium 2", "Stomach 2", "Soft tissue 2" and "Skin 2". They are dropped so each organ is one
-   category [1 344 921, 45 tissue categories].
+   category [1 344 920, 45 tissue categories].
 4. **Antibody filters.** Every HPA image is stained with one antibody, and HPA scores each antibody's
    reliability (`enhanced` > `supported` > `approved` > `uncertain`). Three steps:
-   * drop antibodies scored `uncertain` [981 066];
-   * drop antibodies that target more than one gene, according to `antibodies.csv` [930 038];
+   * drop antibodies scored `uncertain` [981 051];
+   * drop antibodies that target more than one gene, according to `antibodies.csv` [930 180];
    * keep **one antibody per gene**: among the antibodies that still have images, the one with the highest
-     reliability score, ties broken by a seeded shuffle [709 860 images, 6 126 antibodies = 6 126 genes].
+     reliability score, ties broken by a seeded shuffle [709 966 images, 6 126 antibodies = 6 126 genes].
      The dataset is therefore one antibody, i.e. one protein, per gene, which keeps the gene set as large
      as possible without near-duplicate stainings of the same protein.
 5. **Unique image id.** HPA cross-lists every "Soft tissue 1" image under "Adipose tissue" as well (same
    image, same patient). The default `--duplicate-policy prefer` keeps the "Soft tissue 1" row; `drop`
-   removes both; `fail` stops and lets you inspect `<output>.csv.duplicates.csv` [697 989].
-6. **Split** (see C) [train 493 852 / val 69 721 / test 134 416 for the IDR full set].
+   removes both; `fail` stops and lets you inspect `<output>.csv.duplicates.csv` [698 053].
+6. **Split** (see C) [train 493 896 / val 69 727 / test 134 430 for the IDR full set].
 
 **B. Pilot dataset**
 
