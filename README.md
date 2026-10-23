@@ -298,9 +298,12 @@ brackets are from the December 2025 release with `--source idr`.
   `--split-from <previous full>` first and then the pilot with `--split-from <new full>`; the first v2 release
   built the pilot fresh and the full dataset from it.
 * The script aborts if any antibody ends up in more than one split.
-* **Not separated: patients.** Every antibody is stained on the same tissue-microarray cores, so nearly every
-  test image has its patient (and tissue core) in train. Tissue classification on test can be helped by
-  recognising the patient.
+* **Not separated: patients.** Every antibody is stained on the same tissue-microarray cores (a patient's
+  core in one tissue carries a median of 117 antibodies in the pilot), and there are far fewer patients
+  (467 in the pilot) than antibodies, so a split cannot keep both apart without discarding most images.
+  Nearly every test image has its patient (and tissue core) in train, and tissue classification on test can be
+  helped by recognising the patient. `patient_id` is in every CSV: for tissue probes, exclude same-patient
+  neighbours (kNN) or report results grouped by patient.
 * **Earlier split (v1, 2025-12).** It used iterative stratification on the tissues of an ID-sorted antibody
   list, which put the newest antibodies into train and the oldest and the commercial ones into val/test
   (pilot: 70 % of val/test images stained 2009-10 vs 21 % of train; CAB antibodies 21 % of val/test vs 3 % of
