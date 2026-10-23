@@ -298,7 +298,7 @@ brackets are from the December 2025 release with `--source idr`.
   `--split-from <previous full>` first and then the pilot with `--split-from <new full>`; the first v2 release
   built the pilot fresh and the full dataset from it.
 * The script aborts if any antibody ends up in more than one split.
-* **Not separated: patients.** Every antibody is stained on the same tissue-microarray cores (a patient's
+* **Patient stratification is not feasible.** Every antibody is stained on the same tissue-microarray cores (a patient's
   core in one tissue carries a median of 117 antibodies in the pilot), and there are far fewer patients
   (467 in the pilot) than antibodies, so a split cannot keep both apart without discarding most images.
   Nearly every test image has its patient (and tissue core) in train, and tissue classification on test can be
