@@ -214,7 +214,7 @@ python scripts/prepare_pilot_dataset.py \
 # full dataset from source 2 (every HPA image), inheriting the pilot's split gene by gene
 python scripts/prepare_pilot_dataset.py \
     --images-csv ./hpa_tissue/metadata/images.csv --antibodies-csv ./hpa_tissue/metadata/antibodies.csv \
-    --source all --stage full --out-dir ./hpa_tissue/metadata \
+    --idr-table ./idr_ftp_paths.csv --source all --stage full --out-dir ./hpa_tissue/metadata \
     --split-from ./hpa_tissue/metadata/HPA_pilot_dataset.csv
 # check the split (exit code 1 if a check fails)
 python scripts/check_dataset_splits.py --dataset pilot=./hpa_tissue/metadata/HPA_pilot_dataset.csv \
@@ -282,7 +282,8 @@ brackets are from the December 2025 release with `--source idr`.
   Groups with fewer than 10 antibodies are merged into a coarser one.
 * **Two stages.** 20 % of the antibodies are held out as test, then 10 % (of all) as val, each with
   scikit-learn's `train_test_split` stratified by these groups. Fractions are `--train-frac/--val-frac/--test-frac`.
-* **Tissue balance.** About 90 % of the antibodies have images in every tissue, so an antibody-level split
+* **Tissue balance.** About 90 % of the pilot antibodies have images in all 20 tissues, and every full-dataset
+  antibody in at least 40 of 45, so an antibody-level split
   gives every tissue close to 70/10/20 % of its images; this is checked, not imposed
   (`check_dataset_splits.py`: every tissue within 1 percentage point).
 * **Deterministic.** All randomness (antibody tie-breaks, tissue sampling, thinning, split) is driven by

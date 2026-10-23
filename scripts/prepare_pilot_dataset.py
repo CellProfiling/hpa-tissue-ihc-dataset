@@ -601,7 +601,8 @@ def parse_args(argv=None):
     p.add_argument("--allow-legacy-split-from", action="store_true",
                    help=f"Allow a --split-from CSV whose split_version is not {SPLIT_VERSION!r}")
     p.add_argument("--set-v1-from", default=None,
-                   help="Older (v1) dataset CSV; its 'set' label is written to a 'set_v1' column by image_id")
+                   help="Older (v1) dataset CSV; its 'set' label is written to a 'set_v1' column by image_id. "
+                        "Use with --stage pilot or --stage full (v1 pilot and full labels differ)")
     p.add_argument("--exclude-ids", default=None,
                    help="CSV with an image_id column; those images are dropped from the pilot subset")
     p.add_argument("--duplicate-policy", choices=["fail", "prefer", "drop"], default="prefer",

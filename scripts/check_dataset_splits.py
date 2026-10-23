@@ -6,7 +6,7 @@ Run on the real CSVs after every regeneration; exits 1 if a check fails. Checks 
   * every image has a set, all three sets are present, no antibody or gene is in two sets;
   * per tissue, the image share of each set is within --tissue-tol percentage points of the target fractions;
   * per set, the share of antibodies in each source x antibody-number stratum (CAB/HPA x quintile, the proxy for
-    staining era used by the split) is within --strata-tol points of its share over all antibodies;
+    staining era used by the split) and in each source is within --strata-tol points of its share over all antibodies;
   * optional (--metadata NAME=CSV with image_id and stained): the staining-year distribution of val and test
     differs from train by at most --year-tvd total-variation distance (only aggregates are printed).
 Across datasets: a gene that occurs in several datasets has the same set in all of them.
@@ -65,10 +65,11 @@ def check_dataset(name, df, fracs, tissue_tol, strata_tol, stained=None, year_tv
     sdev = (per_set.sub(overall, axis=0)).abs().max().max() * 100
     src = ab["antibody_id"].str.extract(r"^([A-Za-z]+)")[0].fillna("other")
     src_share = pd.crosstab(src, ab["set"], normalize="columns").reindex(columns=list(SET_NAMES), fill_value=0)
+    src_dev = (src_share.sub(src.value_counts(normalize=True), axis=0)).abs().max().max() * 100
     src_txt = "; ".join(f"{s} " + "/".join(f"{100 * src_share.loc[s, k]:.1f}" for k in SET_NAMES)
                         for s in src_share.index)
-    res.append((f"source x number strata within {strata_tol} pt", sdev <= strata_tol,
-                f"max |dev| {sdev:.2f} pt; source share train/val/test: {src_txt}"))
+    res.append((f"source x number strata within {strata_tol} pt", sdev <= strata_tol and src_dev <= strata_tol,
+                f"max |dev| strata {sdev:.2f} pt, source {src_dev:.2f} pt; source share train/val/test: {src_txt}"))
 
     if stained is not None:
         year = df["image_id"].map(stained).str[:4]
