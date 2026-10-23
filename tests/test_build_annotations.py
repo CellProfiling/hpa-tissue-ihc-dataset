@@ -104,3 +104,13 @@ def test_main_with_subcellular_writes_fourth_file(tmp_path):
     img = pd.read_csv(tmp_path / "ds_image_annotations.csv", dtype=str, keep_default_na=False).set_index("image_id")
     assert img.loc["i2", "subcellular_supported"] == "Cytosol;Vesicles" and "subcellular_go_id" not in img.columns
     assert (tmp_path / "ds_subcellular_locations.csv").exists()
+
+
+def test_main_carries_split_columns(tmp_path):
+    ds = tmp_path / "ds.csv"
+    _dataset().assign(set_v1="val", split_version="v2").to_csv(ds, index=False)
+    (tmp_path / "meta").mkdir(); _cells().to_csv(tmp_path / "meta" / "cells.csv", index=False)
+    assert A.main(["--dataset-csv", str(ds), "--metadata-dir", str(tmp_path / "meta")]) == 0
+    for name in ("ds_cell_annotations.csv", "ds_image_annotations.csv"):
+        out = pd.read_csv(tmp_path / name, dtype=str, keep_default_na=False)
+        assert {"set", "set_v1", "split_version"} <= set(out.columns) and set(out["split_version"]) == {"v2"}

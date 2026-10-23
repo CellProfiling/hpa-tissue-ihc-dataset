@@ -24,16 +24,23 @@ Stage A - full dataset
     6. Require unique ``image_id``. HPA cross-lists "Soft tissue 1" images as
        "Adipose tissue"; ``--duplicate-policy prefer`` (default) keeps the
        "Soft tissue 1" row.
-    7. Split by antibody (no antibody in two sets), stratified by tissue, seeded.
+    7. Split by antibody (no antibody in two sets), seeded: two scikit-learn
+       ``train_test_split`` stages (test, then val) stratified by antibody source
+       (CAB/HPA) x antibody-number quintile, which balances staining era and
+       source. Tissue balance follows from every antibody covering (nearly) all
+       tissues and is checked with ``check_dataset_splits.py``.
 
 Stage B - pilot subset
     Restrict to the 20 ``PILOT_TISSUES``; per (antibody, tissue) keep 2 of 3
     images; drop one image from 40 % of the 2-image pairs; optional exclusion
     list; re-split as above.
 
-``--split-from`` copies the ``set`` label of an existing CSV by ``image_id`` so
-a re-generation keeps earlier train/val/test membership. Rows without a match are split by the seeded
-procedure.
+``--split-from`` copies the ``set`` label of an existing CSV: by ``image_id``, then to the other images of
+the same antibody, then (if that CSV has ``ensembl_id``) to every antibody of the same gene. Rows without a
+match are split by the seeded procedure. The CSV must carry ``split_version`` = ``SPLIT_VERSION``
+(``--allow-legacy-split-from`` overrides). Release order: the full dataset inherits from the previous full
+dataset, then the pilot inherits from the new full dataset (the first v2 release: pilot fresh, then full
+``--split-from`` the new pilot), so pilot and full agree per gene.
 """
 
 import argparse
@@ -43,8 +50,7 @@ import sys
 
 import numpy as np
 import pandas as pd
-from sklearn.preprocessing import MultiLabelBinarizer
-from skmultilearn.model_selection import IterativeStratification
+from sklearn.model_selection import train_test_split
 
 logger = logging.getLogger("prepare_pilot_dataset")
 
@@ -93,7 +99,16 @@ GROUP_KEY = ["antibody_id", "tissue"]
 OUTPUT_COLUMNS = [
     "image_id", "antibody_id", "ensembl_id", "gene_name", "tissue", "organ", "patient_id",
     "image_type", "hpa_url", "idr_available", "idr_ftp_path", "idr_url", "local_path", "set",
+    "split_version",
 ]
+OPTIONAL_OUTPUT_COLUMNS = ["set_v1"]   # written only when --set-v1-from is given
+
+# v1: skmultilearn iterative stratification on an ID-sorted antibody list (2025-12 release; val/test skewed to
+# old and CAB antibodies). v2: source x antibody-number strata, see split_antibodies().
+SPLIT_VERSION = "v2"
+SET_NAMES = ("train", "val", "test")
+N_ERA_BINS = 5       # antibody-number quantile bins per source (proxy for staining era)
+MIN_STRATUM = 10     # antibodies; smaller strata fall back to a coarser one
 
 CSV_READ_KWARGS = dict(dtype=str, keep_default_na=False, low_memory=False)
 
@@ -268,64 +283,141 @@ def resolve_duplicates(df, policy, report_path):
 # Splitting
 # --------------------------------------------------------------------------- #
 
-def strat_split(X, y, test_size, seed):
-    """Seeded iterative stratification (body of skmultilearn's iterative_train_test_split + seed).
+def antibody_strata(antibody_ids, n_bins=N_ERA_BINS, min_size=MIN_STRATUM):
+    """Stratum label per antibody: source prefix (CAB, HPA, ...) x antibody-number quantile bin within the source.
 
-    skmultilearn 0.2.0 breaks ties with the *global* ``np.random`` and ignores its
-    own ``random_state`` argument (passing it even raises with sklearn >= 1.3), so
-    the global RNG is seeded for the duration of the split and restored afterwards.
+    HPA antibody numbers grow with the staining date (Spearman ~0.8 in the 2025-12 data) and CAB antibodies are a
+    separate, older series, so these strata balance staining era and antibody source across the sets. Ids that do
+    not look like ``<letters><digits>`` form the stratum ``other``. Strata with fewer than ``min_size`` antibodies
+    fall back to their source, then to a common stratum, then into the largest stratum.
     """
-    strat = IterativeStratification(
-        n_splits=2, order=2, sample_distribution_per_fold=[test_size, 1.0 - test_size],
-    )
-    state = np.random.get_state()
-    np.random.seed(seed)
+    ids = pd.Series(list(antibody_ids), dtype=str)
+    parts = ids.str.extract(r"^([A-Za-z]+)(\d+)$")
+    source = parts[0].fillna("other")
+    number = pd.to_numeric(parts[1], errors="coerce")
+    label = source.copy()
+    for src, idx in source.groupby(source).groups.items():
+        if src == "other":
+            continue
+        k = min(n_bins, max(1, len(idx) // min_size))
+        bins = pd.qcut(number.loc[idx].rank(method="first"), k, labels=False).astype(int)
+        label.loc[idx] = src + "_" + bins.astype(str)
+    for coarser in (source, pd.Series("all", index=ids.index)):
+        small = label.map(label.value_counts()) < min_size
+        label = label.where(~small, coarser)
+    small = label.map(label.value_counts()) < min_size
+    if small.any() and (~small).any():
+        label[small] = label[~small].value_counts().idxmax()
+    return label.to_numpy()
+
+
+def _split_off(ids, strata, size, seed):
+    """Hold out ``size`` antibodies (seeded train_test_split), stratified unless a stratum is too small."""
+    if size <= 0:
+        return ids, ids[:0], strata
+    stratify = strata if len(set(strata)) > 1 else None
     try:
-        train_idx, test_idx = next(strat.split(X, y))
-    finally:
-        np.random.set_state(state)
-    return X[train_idx], y[train_idx], X[test_idx], y[test_idx]
+        keep, held, s_keep, _ = train_test_split(ids, strata, test_size=size, random_state=seed, stratify=stratify)
+    except ValueError as err:
+        logger.warning("stratified split of %d antibodies not possible (%s); splitting without strata", len(ids), err)
+        keep, held, s_keep, _ = train_test_split(ids, strata, test_size=size, random_state=seed)
+    return keep, held, s_keep
 
 
 def split_antibodies(df, train_frac, val_frac, test_frac, seed):
-    """antibody_id -> set for every antibody in df (tissue-stratified, seeded)."""
-    grouped = df.groupby("antibody_id")["tissue"].unique().reset_index()
-    n = len(grouped)
+    """antibody_id -> set for every antibody in df (split version v2).
+
+    Two seeded scikit-learn ``train_test_split`` stages, test first, then val from the rest (sizes rounded from
+    ``test_frac`` and ``val_frac`` of all antibodies), both stratified by
+    :func:`antibody_strata` (source x antibody-number quintile). The antibody list is sorted first, so the result
+    depends only on the set of antibodies and the seed. Tissue is not a stratification variable: almost every
+    antibody has images in (nearly) all tissues, so any antibody-level split is tissue-balanced;
+    ``check_dataset_splits.py`` verifies this on the real CSVs. Fewer than 3 antibodies all go to train.
+    """
+    ids = np.array(sorted(df["antibody_id"].unique()))
+    n = len(ids)
     if n == 0:
         return {}
     if n < 3:
-        return {a: "train" for a in grouped["antibody_id"]}
-    X = np.arange(n).reshape(-1, 1)
-    y = MultiLabelBinarizer().fit_transform(grouped["tissue"])
-    X_trainval, y_trainval, X_test, _ = strat_split(X, y, test_frac, seed)
-    val_rel = val_frac / (train_frac + val_frac)
-    X_train, _, X_val, _ = strat_split(X_trainval, y_trainval, val_rel, seed)
-    assign = {}
-    for X_part, name in ((X_train, "train"), (X_val, "val"), (X_test, "test")):
-        for i in X_part.flatten():
-            assign[grouped.loc[i, "antibody_id"]] = name
+        return {a: "train" for a in ids}
+    strata = antibody_strata(ids)
+    n_test, n_val = int(round(test_frac * n)), int(round(val_frac * n))   # sizes from the overall fractions
+    trainval, test, s_trainval = _split_off(ids, strata, n_test, seed)
+    train, val, _ = _split_off(trainval, s_trainval, min(n_val, len(trainval) - 1), seed)
+    assign = {a: "train" for a in train}
+    assign.update({a: "val" for a in val})
+    assign.update({a: "test" for a in test})
     return assign
 
 
+def check_split_from_version(path, allow_legacy=False):
+    """Refuse a --split-from CSV that was not made by the current split version (it would re-import its bias)."""
+    head = pd.read_csv(path, nrows=0)
+    if "split_version" in head.columns:
+        versions = set(pd.read_csv(path, usecols=["split_version"], dtype=str,
+                                   keep_default_na=False)["split_version"])
+    else:
+        versions = set()
+    if versions == {SPLIT_VERSION}:
+        return
+    msg = (f"--split-from {path} has split_version {sorted(versions) or 'missing'}, expected {SPLIT_VERSION!r}; "
+           f"inheriting an older split keeps its train/val/test imbalance")
+    if not allow_legacy:
+        raise ValueError(msg + " (pass --allow-legacy-split-from to inherit it anyway)")
+    logger.warning(msg)
+
+
 def assign_sets(df, train_frac, val_frac, test_frac, seed, split_from=None):
-    """Add a 'set' column. Optionally inherit labels from an existing CSV by image_id."""
+    """Add 'set' and 'split_version' columns. Optionally inherit labels from an existing dataset CSV.
+
+    Inheritance from ``split_from``, in this order: by ``image_id``; then every other image of an antibody that
+    has an inherited image; then, if that CSV has ``ensembl_id``, every antibody of a gene listed there (the pilot
+    and the full dataset can use different antibodies for one gene). Aborts if the CSV gives one antibody or one
+    gene several sets. Antibodies without any match are split by :func:`split_antibodies`.
+    """
     df = df.copy()
     df["set"] = ""
+    df["split_version"] = SPLIT_VERSION
     if split_from is not None:
         prev = read_csv(split_from)
-        prev = prev[prev["set"].isin(["train", "val", "test"])].drop_duplicates("image_id")
+        if "set" not in prev.columns:
+            raise ValueError(f"{split_from} has no 'set' column")
+        prev = prev[prev["set"].isin(SET_NAMES)]
+        multi = prev.groupby("image_id")["set"].nunique()
+        if (multi > 1).any():
+            raise RuntimeError(f"{int((multi > 1).sum())} image_ids have several sets in {split_from}")
+        prev = prev.drop_duplicates("image_id")
         df["set"] = df["image_id"].map(prev.set_index("image_id")["set"]).fillna("")
-        inherited = int((df["set"] != "").sum())
-        # Antibodies with some inherited rows: give the remaining rows the same set
-        # (majority vote) so no antibody ends up in two sets.
+        by_image = int((df["set"] != "").sum())
+
         labeled = df[df["set"] != ""]
-        per_ab = labeled.groupby("antibody_id")["set"].agg(lambda s: s.value_counts().idxmax())
-        n_conflict = int((labeled.groupby("antibody_id")["set"].nunique() > 1).sum())
-        fill = (df["set"] == "") & df["antibody_id"].isin(per_ab.index)
-        df.loc[fill, "set"] = df.loc[fill, "antibody_id"].map(per_ab)
-        logger.info("split-from %s: %d rows inherited, %d rows filled from their antibody, "
-                    "%d antibodies had conflicting inherited sets (majority kept)",
-                    os.path.basename(split_from), inherited, int(fill.sum()), n_conflict)
+        per_ab_n = labeled.groupby("antibody_id")["set"].nunique()
+        if (per_ab_n > 1).any():
+            bad = per_ab_n[per_ab_n > 1].index[:5].tolist()
+            raise RuntimeError(f"{int((per_ab_n > 1).sum())} antibodies have images in several sets in "
+                               f"{split_from} (e.g. {bad}); fix that file or drop --split-from")
+        per_ab = labeled.groupby("antibody_id")["set"].first()
+        fill_ab = (df["set"] == "") & df["antibody_id"].isin(per_ab.index)
+        df.loc[fill_ab, "set"] = df.loc[fill_ab, "antibody_id"].map(per_ab)
+
+        by_gene = 0
+        if "ensembl_id" in prev.columns:
+            if (prev["ensembl_id"] == "").any() or (df["ensembl_id"] == "").any():
+                raise ValueError("empty ensembl_id: gene-level --split-from needs a gene for every row")
+            per_gene_n = prev.groupby("ensembl_id")["set"].nunique()
+            if (per_gene_n > 1).any():
+                bad = per_gene_n[per_gene_n > 1].index[:5].tolist()
+                raise RuntimeError(f"{int((per_gene_n > 1).sum())} genes span several sets in {split_from} "
+                                   f"(e.g. {bad})")
+            per_gene = prev.groupby("ensembl_id")["set"].first()
+            fill_gene = (df["set"] == "") & df["ensembl_id"].isin(per_gene.index)
+            df.loc[fill_gene, "set"] = df.loc[fill_gene, "ensembl_id"].map(per_gene)
+            by_gene = int(fill_gene.sum())
+        else:
+            logger.info("split-from %s has no ensembl_id column; gene-level inheritance skipped",
+                        os.path.basename(split_from))
+        logger.info("split-from %s: %d rows by image_id, %d by antibody, %d by gene",
+                    os.path.basename(split_from), by_image, int(fill_ab.sum()), by_gene)
 
     todo = df[df["set"] == ""]
     if len(todo):
@@ -336,9 +428,20 @@ def assign_sets(df, train_frac, val_frac, test_frac, seed, split_from=None):
     spans = df.groupby("antibody_id")["set"].nunique()
     if (spans > 1).any():
         raise RuntimeError(f"{int((spans > 1).sum())} antibodies span several sets")
-    for name in ("train", "val", "test"):
+    for name in SET_NAMES:
         n = int((df["set"] == name).sum())
         logger.info("  %-5s %9d images (%.1f%%)", name, n, 100.0 * n / max(len(df), 1))
+    return df
+
+
+def attach_set_v1(df, path):
+    """Add 'set_v1': the 'set' label of the same image_id in an older (v1) dataset CSV, empty if absent."""
+    prev = read_csv(path)
+    prev = prev[prev["set"].isin(SET_NAMES)].drop_duplicates("image_id")
+    df = df.copy()
+    df["set_v1"] = df["image_id"].map(prev.set_index("image_id")["set"]).fillna("")
+    logger.info("set_v1 from %s: %d of %d rows labelled", os.path.basename(path),
+                int((df["set_v1"] != "").sum()), len(df))
     return df
 
 
@@ -427,7 +530,8 @@ def finalize_columns(df):
     missing = [c for c in OUTPUT_COLUMNS if c not in df.columns]
     if missing:
         raise KeyError(f"output is missing columns {missing}")
-    return df[OUTPUT_COLUMNS].reset_index(drop=True)
+    cols = OUTPUT_COLUMNS + [c for c in OPTIONAL_OUTPUT_COLUMNS if c in df.columns]
+    return df[cols].reset_index(drop=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -492,7 +596,12 @@ def parse_args(argv=None):
     p.add_argument("--test-frac", type=float, default=0.20)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--split-from", default=None,
-                   help="Existing dataset CSV; its 'set' labels are inherited by image_id")
+                   help="Existing dataset CSV (same split_version); its 'set' labels are inherited by image_id, "
+                        "antibody and, if it has ensembl_id, gene")
+    p.add_argument("--allow-legacy-split-from", action="store_true",
+                   help=f"Allow a --split-from CSV whose split_version is not {SPLIT_VERSION!r}")
+    p.add_argument("--set-v1-from", default=None,
+                   help="Older (v1) dataset CSV; its 'set' label is written to a 'set_v1' column by image_id")
     p.add_argument("--exclude-ids", default=None,
                    help="CSV with an image_id column; those images are dropped from the pilot subset")
     p.add_argument("--duplicate-policy", choices=["fail", "prefer", "drop"], default="prefer",
@@ -529,6 +638,8 @@ def main(argv=None):
     logger.info("images=%s antibodies=%s idr_table=%s source=%s seed=%d",
                 args.images_csv, args.antibodies_csv, args.idr_table, args.source, args.seed)
 
+    if args.split_from:
+        check_split_from_version(args.split_from, args.allow_legacy_split_from)
     images = read_csv(args.images_csv)
     antibodies = read_csv(args.antibodies_csv)
     idr_table = read_csv(args.idr_table) if os.path.exists(args.idr_table) else None
@@ -542,6 +653,8 @@ def main(argv=None):
         duplicate_report=os.path.join(args.out_dir, "duplicate_image_ids.csv"),
         fracs=fracs, split_from=args.split_from, steps=steps,
     )
+    if args.set_v1_from and args.stage in ("full", "both"):
+        full = attach_set_v1(full, args.set_v1_from)
     full_out = finalize_columns(full)
     os.makedirs(os.path.dirname(os.path.abspath(args.full_output)), exist_ok=True)
     if args.stage in ("full", "both"):
@@ -557,6 +670,8 @@ def main(argv=None):
         pilot_steps = StepLog("pilot")
         pilot = build_pilot_subset(full, args.seed, exclude_ids=exclude, fracs=fracs,
                                    split_from=args.split_from, steps=pilot_steps)
+        if args.set_v1_from:
+            pilot = attach_set_v1(pilot, args.set_v1_from)
         pilot_out = finalize_columns(pilot)
         pilot_out.to_csv(args.pilot_output, index=False)
         logger.info("wrote %s (%d rows)", args.pilot_output, len(pilot_out))

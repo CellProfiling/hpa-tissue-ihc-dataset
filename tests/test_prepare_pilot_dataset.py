@@ -247,3 +247,130 @@ def test_pilot_stage_end_to_end():
     assert "A_Adr_0" not in set(out["image_id"])
     assert set(out["set"]) <= {"train", "val", "test"}
     assert (out.groupby("antibody_id")["set"].nunique() == 1).all()
+
+
+# --------------------------------------------------------------------------- #
+# Split v2: era/source balance, inheritance by gene, guards
+# --------------------------------------------------------------------------- #
+
+def _uniform_frame(n_hpa=300, n_cab=0, tissues=None, prefix=""):
+    """Antibodies that all share the same tissues (as ~90 % of real ones do); higher HPA number = newer."""
+    tissues = tissues or P.PILOT_TISSUES[:5]
+    ids = [f"HPA{i:06d}" for i in range(1, n_hpa + 1)] + [f"CAB{i:06d}" for i in range(1, n_cab + 1)]
+    rows = [{"image_id": f"{prefix}{ab}_{t[:4]}", "antibody_id": ab, "ensembl_id": "G" + ab, "tissue": t}
+            for ab in ids for t in tissues]
+    return pd.DataFrame(rows)
+
+
+@pytest.mark.parametrize("seed", [0, 1, 42])
+def test_split_is_not_ordered_by_antibody_id(seed):
+    # Regression for v1: skmultilearn on the ID-sorted antibody list put none of the newest half into test.
+    s = pd.Series(P.split_antibodies(_uniform_frame(300), 0.7, 0.1, 0.2, seed))
+    newest = s.index.str[3:].astype(int) > 150
+    assert 0.4 <= (s[newest] == "test").sum() / (s == "test").sum() <= 0.6
+
+
+def test_split_balances_antibody_source_and_fractions():
+    s = pd.Series(P.split_antibodies(_uniform_frame(400, 100), 0.7, 0.1, 0.2, 42))
+    cab = s.index.str.startswith("CAB")
+    assert all(abs(cab[s == k].mean() - 0.2) <= 0.02 for k in P.SET_NAMES)
+    assert s.value_counts().to_dict() == {"train": 350, "test": 100, "val": 50}
+
+
+def test_split_depends_on_antibodies_and_seed_only():
+    df = _uniform_frame(120, 30)
+    a = P.split_antibodies(df, 0.7, 0.1, 0.2, 42)
+    assert a == P.split_antibodies(df.sample(frac=1, random_state=3), 0.7, 0.1, 0.2, 42)
+    assert a != P.split_antibodies(df, 0.7, 0.1, 0.2, 7)
+
+
+def test_antibody_strata_fall_back_for_small_and_unparseable_ids():
+    ids = [f"HPA{i:06d}" for i in range(40)] + ["CAB000001", "CAB000002", "CAB000003", "XYZ", "A"]
+    assert pd.Series(P.antibody_strata(ids)).value_counts().min() >= P.MIN_STRATUM
+    s = P.split_antibodies(pd.DataFrame({"antibody_id": ids, "tissue": "Lung"}), 0.7, 0.1, 0.2, 42)
+    assert sorted(s) == sorted(ids) and set(s.values()) == set(P.SET_NAMES)
+
+
+@pytest.mark.parametrize("n", [0, 1, 2, 3, 4, 7])
+def test_split_small_inputs(n):
+    ids = [chr(65 + i) for i in range(n)]
+    s = P.split_antibodies(pd.DataFrame({"antibody_id": ids, "tissue": "Lung"}), 0.7, 0.1, 0.2, 42)
+    assert sorted(s) == ids
+    assert set(s.values()) <= ({"train"} if n < 3 else set(P.SET_NAMES))
+    if n >= 3:
+        assert "train" in s.values() and "test" in s.values()
+
+
+def test_split_from_inherits_by_gene_and_splits_new_genes(tmp_path):
+    pilot = P.assign_sets(_uniform_frame(100), 0.7, 0.1, 0.2, seed=42)
+    path = tmp_path / "pilot.csv"
+    pilot.to_csv(path, index=False)
+    # full: more tissues, 50 new genes, and gene GHPA000001 measured with another antibody and other images
+    full = _uniform_frame(150, tissues=P.PILOT_TISSUES[:8], prefix="f")
+    full.loc[full["antibody_id"] == "HPA000001", "antibody_id"] = "CAB999999"
+    out = P.assign_sets(full, 0.7, 0.1, 0.2, seed=42, split_from=str(path))
+    g_pilot = pilot.drop_duplicates("ensembl_id").set_index("ensembl_id")["set"]
+    g_full = out.drop_duplicates("ensembl_id").set_index("ensembl_id")["set"]
+    assert (g_full[g_pilot.index] == g_pilot).all()
+    assert set(out.loc[~out["ensembl_id"].isin(g_pilot.index), "set"]) == set(P.SET_NAMES)
+    assert (out.groupby("antibody_id")["set"].nunique() == 1).all()
+    assert (out["split_version"] == P.SPLIT_VERSION).all()
+
+
+def test_split_from_conflicts_abort(tmp_path):
+    df = _uniform_frame(30)
+    prev = P.assign_sets(df, 0.7, 0.1, 0.2, seed=1)
+
+    bad_ab = prev.copy()
+    rows = bad_ab.index[bad_ab["antibody_id"] == "HPA000001"]
+    bad_ab.loc[rows[:2], "set"], bad_ab.loc[rows[2:], "set"] = "train", "test"
+    bad_ab.to_csv(tmp_path / "a.csv", index=False)
+    with pytest.raises(RuntimeError, match="antibodies have images in several sets"):
+        P.assign_sets(df, 0.7, 0.1, 0.2, seed=1, split_from=str(tmp_path / "a.csv"))
+
+    per_ab = prev.drop_duplicates("antibody_id").set_index("antibody_id")["set"]
+    a1, a2 = per_ab[per_ab == "train"].index[0], per_ab[per_ab == "test"].index[0]
+    bad_gene = prev.copy()
+    bad_gene.loc[bad_gene["antibody_id"] == a2, "ensembl_id"] = "G" + a1
+    bad_gene.to_csv(tmp_path / "g.csv", index=False)
+    with pytest.raises(RuntimeError, match="genes span several sets"):
+        P.assign_sets(df, 0.7, 0.1, 0.2, seed=1, split_from=str(tmp_path / "g.csv"))
+
+    empty = prev.copy()
+    empty.loc[empty.index[0], "ensembl_id"] = ""
+    empty.to_csv(tmp_path / "e.csv", index=False)
+    with pytest.raises(ValueError, match="empty ensembl_id"):
+        P.assign_sets(df, 0.7, 0.1, 0.2, seed=1, split_from=str(tmp_path / "e.csv"))
+
+
+def test_split_from_version_guard(tmp_path):
+    v2 = P.assign_sets(_uniform_frame(10), 0.7, 0.1, 0.2, seed=42)
+    v2.to_csv(tmp_path / "v2.csv", index=False)
+    P.check_split_from_version(str(tmp_path / "v2.csv"))
+    v2.drop(columns="split_version").to_csv(tmp_path / "v1.csv", index=False)
+    with pytest.raises(ValueError, match="split_version"):
+        P.check_split_from_version(str(tmp_path / "v1.csv"))
+    P.check_split_from_version(str(tmp_path / "v1.csv"), allow_legacy=True)
+
+
+def test_main_split_version_set_v1_and_legacy_guard(images, antibodies, idr_table, tmp_path):
+    for name, frame in (("images", images), ("antibodies", antibodies), ("idr", idr_table)):
+        frame.to_csv(tmp_path / f"{name}.csv", index=False)
+    base = ["--images-csv", str(tmp_path / "images.csv"), "--antibodies-csv", str(tmp_path / "antibodies.csv"),
+            "--idr-table", str(tmp_path / "idr.csv"), "--source", "idr", "--stage", "full"]
+    first = tmp_path / "first.csv"
+    assert P.main(base + ["--full-output", str(first)]) == 0
+    out = P.read_csv(first)
+    assert list(out.columns) == P.OUTPUT_COLUMNS and set(out["split_version"]) == {P.SPLIT_VERSION}
+
+    legacy = out.drop(columns="split_version").assign(set="test")
+    legacy.to_csv(tmp_path / "legacy.csv", index=False)
+    with pytest.raises(ValueError, match="split_version"):
+        P.main(base + ["--full-output", str(tmp_path / "x.csv"), "--split-from", str(tmp_path / "legacy.csv")])
+
+    second = tmp_path / "second.csv"
+    assert P.main(base + ["--full-output", str(second), "--split-from", str(first),
+                          "--set-v1-from", str(tmp_path / "legacy.csv")]) == 0
+    again = P.read_csv(second)
+    assert again["set"].tolist() == out["set"].tolist()
+    assert list(again.columns) == P.OUTPUT_COLUMNS + ["set_v1"] and set(again["set_v1"]) == {"test"}

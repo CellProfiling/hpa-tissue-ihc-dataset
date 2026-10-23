@@ -136,7 +136,9 @@ def load_rows(csv_path, sets=None, max_images=None):
         raise ValueError(f"CSV lacks columns {missing}")
     if not any(c in df.columns for c in URL_COLUMNS.values()):
         raise ValueError("CSV has neither idr_url nor hpa_url")
-    if sets and "set" in df.columns:
+    if sets:
+        if "set" not in df.columns:
+            raise ValueError("--set given but the CSV has no 'set' column")
         df = df[df["set"].isin(sets)]
     for col in URL_COLUMNS.values():
         if col not in df.columns:

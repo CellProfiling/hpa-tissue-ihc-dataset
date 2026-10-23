@@ -75,11 +75,12 @@ A dataset CSV (`HPA_pilot_dataset.csv`, or any output of section 3) has one row 
 
 ```
 image_id, antibody_id, ensembl_id, gene_name, tissue, organ, patient_id, image_type,
-hpa_url, idr_available, idr_ftp_path, idr_url, local_path, set
+hpa_url, idr_available, idr_ftp_path, idr_url, local_path, set, split_version[, set_v1]
 ```
 
-* `set` is `train` / `val` / `test` (pilot: 133 203 / 18 526 / 35 956). Splits are by antibody (no antibody
-  appears in two splits) and stratified by tissue.
+* `set` is `train` / `val` / `test` (pilot: 131 345 / 18 747 / 37 593). Splits are by antibody (no antibody
+  or gene appears in two splits), balanced for staining era, antibody source and tissue (see C).
+  `split_version` is `v2`; the 2026-10 CSVs also carry `set_v1`, the label of the earlier 2025-12 split.
 * `idr_url` is the EBI/IDR mirror (`https://ftp.ebi.ac.uk/pub/databases/IDR/idr0043-uhlen-humanproteinatlas/...`,
   answers `200 image/tiff`). `hpa_url` is the HPA `.tif` link; it answers `302` and redirects to the EBI
   BioStudies mirror. Both give the same TIFF. HPA serves every image as TIFF at `<image>.tif`, also the
@@ -210,10 +211,14 @@ makes `local_path` follow the IDR batch folders; without it images are grouped i
 python scripts/prepare_pilot_dataset.py \
     --images-csv ./hpa_tissue/metadata/images.csv --antibodies-csv ./hpa_tissue/metadata/antibodies.csv \
     --idr-table ./idr_ftp_paths.csv --source idr --stage pilot --out-dir ./hpa_tissue/metadata
-# full dataset from source 2 (every HPA image)
+# full dataset from source 2 (every HPA image), inheriting the pilot's split gene by gene
 python scripts/prepare_pilot_dataset.py \
     --images-csv ./hpa_tissue/metadata/images.csv --antibodies-csv ./hpa_tissue/metadata/antibodies.csv \
-    --source all --stage full --out-dir ./hpa_tissue/metadata
+    --source all --stage full --out-dir ./hpa_tissue/metadata \
+    --split-from ./hpa_tissue/metadata/HPA_pilot_dataset.csv
+# check the split (exit code 1 if a check fails)
+python scripts/check_dataset_splits.py --dataset pilot=./hpa_tissue/metadata/HPA_pilot_dataset.csv \
+    --dataset full=./hpa_tissue/metadata/HPA_full_dataset.csv
 # --stage both writes both files for one source; --save-plots --plot-dir <dir> adds tissue/organ histograms
 ```
 
@@ -244,7 +249,7 @@ brackets are from the December 2025 release with `--source idr`.
 5. **Unique image id.** HPA cross-lists every "Soft tissue 1" image under "Adipose tissue" as well (same
    image, same patient). The default `--duplicate-policy prefer` keeps the "Soft tissue 1" row; `drop`
    removes both; `fail` stops and writes the duplicated rows to `duplicate_image_ids.csv` [698 053].
-6. **Split** (see C) [train 493 896 / val 69 727 / test 134 430 for the IDR full set].
+6. **Split** (see C) [train 488 524 / val 69 994 / test 139 535 for the IDR full set].
 
 **B. Pilot dataset**
 
@@ -263,27 +268,44 @@ brackets are from the December 2025 release with `--source idr`.
    spend the image budget on more antibodies rather than on near-replicates of the same staining, per
    (antibody, tissue) group with exactly 3 images one is dropped [231 229], and in 40 % of the groups with
    exactly 2 images one is dropped [187 685]. Which image goes is decided by a seeded shuffle.
-3. **Split** as in C, redone on the pilot rows [train 133 203 / val 18 526 / test 35 956].
+3. **Split** as in C, redone on the pilot rows [train 131 345 / val 18 747 / test 37 593].
 
-**C. Train / val / test split**
+**C. Train / val / test split** (split version v2, 2026-10)
 
 * **Unit is the antibody, not the image.** All images of one antibody, across all tissues and patients, go
-  to the same split. Because the full set has one antibody per gene, no gene appears in two splits either.
+  to the same split. Because a dataset has one antibody per gene, no gene appears in two splits either.
   This prevents leakage: a model cannot recognise a protein's staining pattern in the test set because it
   saw the same antibody in training.
-* **Stratified by tissue.** Each antibody is described by the set of tissues it has images in (a
-  multi-label vector). The antibodies are then split with iterative stratification (Sechidis et al., 2011;
-  `scikit-multilearn`, second-order label combinations), which balances the tissue combinations across the
-  splits. As a result each tissue has close to 70/10/20 % of its images in train/val/test.
-* **Two stages.** First 20 % of the antibodies are held out as test, then the remaining 80 % are split
-  70:10 into train and val with the same procedure. Fractions are `--train-frac/--val-frac/--test-frac`.
-* **Deterministic.** All randomness (antibody tie-breaks, tissue sampling, thinning, stratification
-  tie-breaks) is driven by `--seed` (default 42). The same crawl and seed give the same CSVs.
-* **Inheriting an existing split.** `--split-from <csv>` copies the `set` label from an existing dataset
-  CSV by `image_id`. If an antibody has some labelled images, its unlabelled images get the same label
-  (majority vote), so the antibody rule still holds; only antibodies with no labelled image go through the
-  stratified split. Use this to keep test images fixed across HPA releases.
+* **Stratified by antibody source and number.** Antibodies are grouped by source (`CAB` = commercial,
+  `HPA` = in-house) and by antibody-number quintile within the source. HPA antibody numbers grow with the
+  staining date, so the groups balance the staining era and the antibody source across the splits.
+  Groups with fewer than 10 antibodies are merged into a coarser one.
+* **Two stages.** 20 % of the antibodies are held out as test, then 10 % (of all) as val, each with
+  scikit-learn's `train_test_split` stratified by these groups. Fractions are `--train-frac/--val-frac/--test-frac`.
+* **Tissue balance.** About 90 % of the antibodies have images in every tissue, so an antibody-level split
+  gives every tissue close to 70/10/20 % of its images; this is checked, not imposed
+  (`check_dataset_splits.py`: every tissue within 1 percentage point).
+* **Deterministic.** All randomness (antibody tie-breaks, tissue sampling, thinning, split) is driven by
+  `--seed` (default 42). The same crawl and seed give the same CSVs. Adding or removing antibodies re-draws
+  the split, so keep it across releases with `--split-from`.
+* **Inheriting an existing split.** `--split-from <csv>` copies the `set` label from an existing dataset CSV:
+  by `image_id`, then to the other images of the same antibody, then (if the CSV has `ensembl_id`) to every
+  antibody of the same gene. Only antibodies without a match go through the split. The run stops if that CSV
+  puts one antibody or gene into two splits, and it refuses CSVs without `split_version` = `v2`
+  (`--allow-legacy-split-from` overrides). `--set-v1-from <csv>` records an older CSV's labels as `set_v1`.
+* **Pilot and full agree per gene.** The pilot (`--source idr`) and the full dataset (`--source all`) come
+  from two runs and can use different antibodies for a gene. For a new release, build the full dataset with
+  `--split-from <previous full>` first and then the pilot with `--split-from <new full>`; the first v2 release
+  built the pilot fresh and the full dataset from it.
 * The script aborts if any antibody ends up in more than one split.
+* **Not separated: patients.** Every antibody is stained on the same tissue-microarray cores, so nearly every
+  test image has its patient (and tissue core) in train. Tissue classification on test can be helped by
+  recognising the patient.
+* **Earlier split (v1, 2025-12).** It used iterative stratification on the tissues of an ID-sorted antibody
+  list, which put the newest antibodies into train and the oldest and the commercial ones into val/test
+  (pilot: 70 % of val/test images stained 2009-10 vs 21 % of train; CAB antibodies 21 % of val/test vs 3 % of
+  train). Models pretrained on v1 train should not be evaluated on v2 val/test: about 71 % of the v2 val/test
+  antibodies were in v1 train.
 
 Outputs in `--out-dir`: `HPA_full_dataset.csv` and/or `HPA_pilot_dataset.csv` (`--full-output` / `--pilot-output`
 to rename, e.g. when building both sources into one directory). The row count after each step is in the log. Runs in a few minutes on a whole crawl (~2.7 M rows).

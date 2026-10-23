@@ -95,3 +95,11 @@ def test_verify_reports_missing_and_corrupt_and_can_delete(tmp_path, monkeypatch
     rc = D.main(["--csv", str(csv), "--root", str(root), "--verify", "--delete-corrupt", "--workers", "1"])
     assert rc == 1 and not (root / "b" / "1" / "bad.tif").exists()
     assert D.verify_row(_row(image_id="good"), str(root))["status"] == "ok"
+
+
+def test_set_filter_needs_a_set_column(tmp_path):
+    csv = tmp_path / "ds.csv"
+    pd.DataFrame([_row(image_id="a")]).to_csv(csv, index=False)
+    with pytest.raises(ValueError, match="no 'set' column"):
+        D.load_rows(str(csv), sets=["test"])
+    assert len(D.load_rows(str(csv))) == 1

@@ -50,6 +50,9 @@ LOCATION_CODE = {"none": 0, "cytoplasmic/membranous": 1, "nuclear": 2, "both": 3
 DATASET_COLUMNS = ["image_id", "antibody_id", "ensembl_id", "gene_name", "tissue", "organ", "patient_id"]
 
 SUBCELLULAR_URL = "https://www.proteinatlas.org/download/tsv/subcellular_location.tsv.zip"
+# Split columns of prepare_pilot_dataset.py, carried through when present.
+SPLIT_COLUMNS = ["set", "set_v1", "split_version"]
+
 # HPA column -> output column. "Gene" (Ensembl id) is the join key; "Gene name" is already in the dataset.
 # "Reliability" is HPA's summary score per gene; Enhanced/Supported/Approved/Uncertain list the locations
 # annotated at that reliability level. Extracellular location, single-cell variation, cell cycle dependency
@@ -210,7 +213,7 @@ def main(argv=None):
     missing = [c for c in DATASET_COLUMNS if c not in dataset.columns]
     if missing:
         p.error(f"dataset CSV lacks columns {missing}")
-    keep = DATASET_COLUMNS + (["set"] if "set" in dataset.columns else [])
+    keep = DATASET_COLUMNS + [c for c in SPLIT_COLUMNS if c in dataset.columns]
     dataset = dataset[keep]
 
     def load(name, required):
