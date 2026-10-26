@@ -286,7 +286,7 @@ def resolve_duplicates(df, policy, report_path):
 def antibody_strata(antibody_ids, n_bins=N_ERA_BINS, min_size=MIN_STRATUM):
     """Stratum label per antibody: source prefix (CAB, HPA, ...) x antibody-number quantile bin within the source.
 
-    HPA antibody numbers grow with the staining date (Spearman ~0.8 in the 2025-12 data) and CAB antibodies are a
+    HPA antibody numbers are assigned over time, so they track when an antibody was stained, and CAB antibodies are a
     separate, older series, so these strata balance staining era and antibody source across the sets. Ids that do
     not look like ``<letters><digits>`` form the stratum ``other``. Strata with fewer than ``min_size`` antibodies
     fall back to their source, then to a common stratum, then into the largest stratum.

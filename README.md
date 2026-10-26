@@ -307,8 +307,8 @@ brackets are from the December 2025 release with `--source idr`.
   neighbours (kNN) or report results grouped by patient.
 * **Earlier split (v1, 2025-12).** It used iterative stratification on the tissues of an ID-sorted antibody
   list, which put the newest antibodies into train and the oldest and the commercial ones into val/test
-  (pilot: 70 % of val/test images stained 2009-10 vs 21 % of train; CAB antibodies 21 % of val/test vs 3 % of
-  train). Models pretrained on v1 train should not be evaluated on v2 val/test: about 71 % of the v2 val/test
+  (pilot: the newer half of the HPA antibodies by number was 100 % train, the older half 50 %; CAB antibodies
+  were 21 % of val/test vs 3 % of train). Models pretrained on v1 train should not be evaluated on v2 val/test: about 71 % of the v2 val/test
   antibodies were in v1 train.
 
 Outputs in `--out-dir`: `HPA_full_dataset.csv` and/or `HPA_pilot_dataset.csv` (`--full-output` / `--pilot-output`
